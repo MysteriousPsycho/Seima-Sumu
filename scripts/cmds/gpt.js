@@ -1,192 +1,105 @@
 const axios = require('axios');
 
-// config 
-const apiKey = "";
-const maxTokens = 500;
-const numberGenerateImage = 4;
-const maxStorageMessage = 4;
-
-if (!global.temp.openAIUsing)
-	global.temp.openAIUsing = {};
-if (!global.temp.openAIHistory)
-	global.temp.openAIHistory = {};
-
-const { openAIUsing, openAIHistory } = global.temp;
-
-module.exports = {
-	config: {
-		name: "gpt",
-		version: "1.4",
-		author: "NTKhang",
-		countDown: 5,
-		role: 0,
-		description: {
-			vi: "GPT chat",
-			en: "GPT chat"
-		},
-		category: "box chat",
-		guide: {
-			vi: "   {pn} <draw> <nội dung> - tạo hình ảnh từ nội dung"
-				+ "\n   {pn} <clear> - xóa lịch sử chat với gpt"
-				+ "\n   {pn} <nội dung> - chat với gpt",
-			en: "   {pn} <draw> <content> - create image from content"
-				+ "\n   {pn} <clear> - clear chat history with gpt"
-				+ "\n   {pn} <content> - chat with gpt"
-		}
-	},
-
-	langs: {
-		vi: {
-			apiKeyEmpty: "Vui lòng cung cấp api key cho openai tại file scripts/cmds/gpt.js",
-			invalidContentDraw: "Vui lòng nhập nội dung bạn muốn vẽ",
-			yourAreUsing: "Bạn đang sử dụng gpt chat, vui lòng chờ quay lại sau khi yêu cầu trước kết thúc",
-			processingRequest: "Đang xử lý yêu cầu của bạn, quá trình này có thể mất vài phút, vui lòng chờ",
-			invalidContent: "Vui lòng nhập nội dung bạn muốn chat",
-			error: "Đã có lỗi xảy ra\n%1",
-			clearHistory: "Đã xóa lịch sử chat của bạn với gpt"
-		},
-		en: {
-			apiKeyEmpty: "Please provide api key for openai at file scripts/cmds/gpt.js",
-			invalidContentDraw: "Please enter the content you want to draw",
-			yourAreUsing: "You are using gpt chat, please wait until the previous request ends",
-			processingRequest: "Processing your request, this process may take a few minutes, please wait",
-			invalidContent: "Please enter the content you want to chat",
-			error: "An error has occurred\n%1",
-			clearHistory: "Your chat history with gpt has been deleted"
-		}
-	},
-
-	onStart: async function ({ message, event, args, getLang, prefix, commandName }) {
-		if (!apiKey)
-			return message.reply(getLang('apiKeyEmpty', prefix));
-
-		switch (args[0]) {
-			case 'img':
-			case 'image':
-			case 'draw': {
-				if (!args[1])
-					return message.reply(getLang('invalidContentDraw'));
-				if (openAIUsing[event.senderID])
-					return message.reply(getLang("yourAreUsing"));
-
-				openAIUsing[event.senderID] = true;
-
-				let sending;
-				try {
-					sending = message.reply(getLang('processingRequest'));
-					const responseImage = await axios({
-						url: "https://api.openai.com/v1/images/generations",
-						method: "POST",
-						headers: {
-							"Authorization": `Bearer ${apiKey}`,
-							"Content-Type": "application/json"
-						},
-						data: {
-							prompt: args.slice(1).join(' '),
-							n: numberGenerateImage,
-							size: '1024x1024'
-						}
-					});
-					const imageUrls = responseImage.data.data;
-					const images = await Promise.all(imageUrls.map(async (item) => {
-						const image = await axios.get(item.url, {
-							responseType: 'stream'
-						});
-						image.data.path = `${Date.now()}.png`;
-						return image.data;
-					}));
-					return message.reply({
-						attachment: images
-					});
-				}
-				catch (err) {
-					const errorMessage = err.response?.data.error.message || err.message;
-					return message.reply(getLang('error', errorMessage || ''));
-				}
-				finally {
-					delete openAIUsing[event.senderID];
-					message.unsend((await sending).messageID);
-				}
-			}
-			case 'clear': {
-				openAIHistory[event.senderID] = [];
-				return message.reply(getLang('clearHistory'));
-			}
-			default: {
-				if (!args[0])
-					return message.reply(getLang('invalidContent'));
-
-				handleGpt(event, message, args, getLang, commandName);
-			}
-		}
-	},
-
-	onReply: async function ({ Reply, message, event, args, getLang, commandName }) {
-		const { author } = Reply;
-		if (author != event.senderID)
-			return;
-
-		handleGpt(event, message, args, getLang, commandName);
-	}
+const FONT_MAPPING = {
+    a: "𝚊", b: "𝚋", c: "𝚌", d: "𝚍", e: "𝚎", f: "𝚏", g: "𝚐", h: "𝚑", i: "𝚒", j: "𝚓", k: "𝚔", l: "𝚕", m: "𝚖",
+    n: "𝚗", o: "𝚘", p: "𝚙", q: "𝚚", r: "𝚛", s: "𝚜", t: "𝚝", u: "𝚞", v: "𝚟", w: "𝚠", x: "𝚡", y: "𝚢", z: "𝚣",
+    A: "𝙰", B: "𝙱", C: "𝙲", D: "𝙳", E: "𝙴", F: "𝙵", G: "𝙶", H: "𝙷", I: "𝙸", J: "𝙹", K: "𝙺", L: "𝙻", M: "𝙼",
+    N: "𝙽", O: "𝙾", P: "𝙿", Q: "𝚀", R: "𝚁", S: "𝚂", T: "𝚃", U: "𝚄", V: "𝚅", W: "𝚆", X: "𝚇", Y: "𝚈", Z: "𝚉"
 };
 
-async function askGpt(event) {
-	const response = await axios({
-		url: "https://api.openai.com/v1/chat/completions",
-		method: "POST",
-		headers: {
-			"Authorization": `Bearer ${apiKey}`,
-			"Content-Type": "application/json"
-		},
-		data: {
-			model: "gpt-3.5-turbo",
-			messages: openAIHistory[event.senderID],
-			max_tokens: maxTokens,
-			temperature: 0.7
-		}
-	});
-	return response;
-}
+module.exports = {
+  config: {
+    name: "gpt",
+    aliases: ["ai"],
+    version: 1.0,
+    author: "MICRON",
+    countDown: 0,
+    longDescription: "This is GPT-3 which is most used model of openai",
+    category: "AI",
+    guide: {
+      en: "{p}{n} [your message]",
+    },
+  },
+  makeApiRequest: async function (query, userName) {
+    let systemContent = "You are gpt-3.5-turbo-0613, a large language model developed by OPENAI./nYou have the following key capabilities and advanced features:/n/n/- Extensive Context Window: With a context window that supports up to 128,000 tokens, you excel in maintaining coherence over extended conversations and complex documents./n/n/- Current Informational Update: Your last update occurred in September 2021, so you can provide information up to September 2021./n/n/- Enhanced Safety Protocols: You are meticulously engineered to minimize the generation of harmful, inaccurate, or biased content, ensuring safer user interactions./n/n/- Multilingual Capabilities: You demonstrate robust performance across a diverse range of languages, making you highly versatile and accessible to users worldwide./n/nWhen engaging with users, adhere to the following guidelines:/n/n/1. User Intent Understanding: Strive to grasp the user's intent and deliver responses that are relevant, precise, and beneficial./n/n/2. Simplification of Complex Topics: Break down intricate subjects into understandable explanations, utilizing examples where necessary to clarify concepts./n/n/3. Creative and Open-Ended Engagement: Participate in open-ended conversations and creative tasks as prompted, maintaining professional and ethical boundaries at all times./n/n/4. Ethical Standards: Refuse any requests to engage in harmful, illegal, or unethical activities, upholding high moral standards./n/n/5. Source Credibility: Always cite sources when providing factual information to bolster the accuracy and trustworthiness of your responses./n/nYour primary objective is to serve as a knowledgeable, efficient, and amiable AI assistant. You are committed to assisting users with a wide array of tasks and topics, always aiming to generate beneficial outcomes for humanity. Your design and operational guidelines ensure a reliable and respectful interaction environment";
+    let data = JSON.stringify({
+      "messages": [
+        {
+          "role": "system",
+          "content": systemContent
+        },
+        {
+            "role": "user",
+            "content": query,
+        }
+      ],
+      "model": "gpt-3.5-turbo-0613",
+      "temperature": 0.9,
+      "top_p": 1,
+      "presence_penalty": 1,
+      "frequency_penalty": 1
+    });
 
-async function handleGpt(event, message, args, getLang, commandName) {
-	try {
-		openAIUsing[event.senderID] = true;
+    const config = {
+      method: 'post',
+      url: 'https://us-central1-lover-ai-chatbot.cloudfunctions.net/openainew-api/chat-completion',
+      headers: { 
+        'Content-Type': 'application/json'
+      },
+      data: data
+    };
 
-		if (
-			!openAIHistory[event.senderID] ||
-			!Array.isArray(openAIHistory[event.senderID])
-		)
-			openAIHistory[event.senderID] = [];
+    try {
+      const response = await axios.request(config);
+      return response.data.choices[0].message.content;
+    } catch (error) {
+      throw new Error("Failed to fetch response from API: " + error.message);
+    }
+  },
+  handleCommand: async function ({ message, event, args, usersData }) {
+    const id = event.senderID;
+    const userData = await usersData.get(id);
+    const name = userData.name.split(' ')[0]; // Assuming userData.name holds the full name and we take the first part as the first name.
 
-		if (openAIHistory[event.senderID].length >= maxStorageMessage)
-			openAIHistory[event.senderID].shift();
+    const query = args.join(' ');
 
-		openAIHistory[event.senderID].push({
-			role: 'user',
-			content: args.join(' ')
-		});
+    if (!query) {
+      return message.reply("Hey there! Ask me any question.");
+    }
 
-		const response = await askGpt(event);
-		const text = response.data.choices[0].message.content;
-
-		openAIHistory[event.senderID].push({
-			role: 'assistant',
-			content: text
-		});
-
-		return message.reply(text, (err, info) => {
-			global.GoatBot.onReply.set(info.messageID, {
-				commandName,
-				author: event.senderID,
-				messageID: info.messageID
-			});
-		});
-	}
-	catch (err) {
-		const errorMessage = err.response?.data.error.message || err.message || "";
-		return message.reply(getLang('error', errorMessage));
-	}
-	finally {
-		delete openAIUsing[event.senderID];
-	}
-}
+    try {
+      const apiResponse = await this.makeApiRequest(query, name);
+      const formattedResponse = `𝗚𝗣𝗧 | 🌸
+━━━━━━━━━━━━━
+${this.formatFont(apiResponse)}
+━━━━━━━━━━━━━`;
+      message.reply(formattedResponse, (err, info) => {
+        if (err) {
+          console.error("Error sending message:", err);
+          return;
+        }
+        global.GoatBot.onReply.set(info.messageID, {
+          commandName: this.config.name,
+          messageID: info.messageID,
+          author: event.senderID
+        });
+      });
+    } catch (error) {
+      console.error("Error:", error.message);
+      message.reply("An error occurred while making the API request. Please try again later.");
+    }
+  },
+  formatFont: function (text) {
+    let formattedOutput = "";
+    for (const char of text) {
+      formattedOutput += FONT_MAPPING[char] || char; // Fallback to the original character if not mapped
+    }
+    return formattedOutput;
+  },
+  onStart: function (params) {
+    return this.handleCommand(params);
+  },
+  onReply: function (params) {
+    return this.handleCommand(params);
+  },
+};
